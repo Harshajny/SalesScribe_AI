@@ -1,18 +1,54 @@
 import os #lets the script to talk to the computer file system
 import pandas as pd #pandas is a data manipulation library
+from dotenv import load_dotenv
+from google import genai
+from pydantic import BaseModel, Field
+load_dotenv()
+
+class SalesCallData(BaseModel):
+    client_name:str=Field(description="The extracted name of the client or prospect")
+    budget:str=Field(description="The financial budget figures or ranges dicussed, formatted nicely into standard currency (e.g., ₹X,XX,XXX).")
+    next_steps: str=Field(description="A concise action-item summary of the follow-up next steps in professional business English ")
 EXCEL_FILE="sales_pipeline.xlsx"
 RECORDINGS_DIR="raw_recordings"
+
 def scan_for_recordings():
     print(f"inspecting ")
-    if not os.path.exists(RECORDINGS_DIR):
+    if not os.path.exists(RECORDINGS_DIR): #checks if the folder exists
         print(f"Directory '{RECORDINGS_DIR}' does not exist. Creating it now...")
-        os.makedirs(RECORDINGS_DIR)
+        os.makedirs(RECORDINGS_DIR) #if there is no such folder it makes one
         return[]
-    all_files=os.listdir(RECORDINGS_DIR)
+    all_files=os.listdir(RECORDINGS_DIR) #provides a list of strings representing everything inside the folder( the folder names in string format and such)
     valid_extensions=('.mp3','.wav','.flac','.m4a')
-    recording_files=[f for f in all_files if f.lower().endswith(valid_extensions)]
+    recording_files=[f for f in all_files if f.lower().endswith(valid_extensions)] #list comprehension: a single loop to filter out according to extensions
     return recording_files
-
+def analyze_audio_with_ai(audio_file_name: str)-> dict:
+        full_path=os.path.join(RECORDINGS_DIR,audio_file_name)
+        print(f"/n Uploading {audio_file_name} to Gemini Cloud Space...")
+        client=genai.Client()
+        audio_asset=client.files.upload(file=full_path)
+        print(f"Audio file uploaded. Processing audio frequencies & transalation rules...")
+        system_prompt=(
+           "You are an elite, expert sales operations analyst. Listen closely to the provided call recording.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Multilingual Handling: The speakers might code-switch, use broken English, or jump into their native languages mid-sentence. "
+        "Completely understand the core semantic intent across all languages spoken.\n"
+        "2. Translation & Cleanup: Automatically translate all non-English talk sections into clean, professional business English. "
+        "Fix fragmented grammar, remove stutters, and omit filler words.\n"
+        "3. Extraction: Extract the prospect's name, the target budget numbers, and the precise future follow-up action items."
+        )
+        response=client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[audio_asset,system_prompt],
+            config={
+                'response_mime_type':'application/json',
+                'response_schema':SalesCallData
+            
+            }
+        )
+        client.files.delete(name=audio_asset.name)
+        print("Temporary cloud file asset wiped clean.")
+        return response.parsed.model_dump()
 def append_to_excel(extracted_data:dict): # function expecting to receive a python dictionary
     new_row=pd.DataFrame([extracted_data]) #DataFrame converts dict keys to column headers and dict values to rows of data
     if os.path.exists(EXCEL_FILE): #os module to check where that file exists in this folder
@@ -29,24 +65,16 @@ if __name__=="__main__":
     found_recordings=scan_for_recordings()
     print('-'*50)
     if not found_recordings:
-        print("No recordings found in the 'raw_recordings' folder. Please add some audio files and rerun the script.")
+            print("No recordings found in the 'raw_recordings' folder")
     else:
         for audio_file in found_recordings:
-            print(f"Processing file:{audio_file}")
-            mock_payload= {
-                "client_name": f"Client ({audio_file})",
-                "budget": "Pending Ai extraction",
-                "next_steps": "Pending Ai extraction"
-            }
-            append_to_excel(mock_payload)
+            print(f"---Processing File: {audio_file}---")
+            try:
+                ai_payload=analyze_audio_with_ai(audio_file)
+                append_to_excel(ai_payload)
+                print(f"Successfully processed and logged data for: {ai_payload.get('client_name','Unknown')}\n")
+            except Exception as e:
+                print(f"Error processing {audio_file}: {str(e)}\n")
     print("\n Scanner processing iteration complete")
-    simulated_batch_results=[
-    {"client_name":"Harsha Johny", "budget":"₹1200","next_steps":"Send contract on friday"},        
-    {"client_name":"Samantha Lee", "budget":"₹5000","next_steps":"Schedule demo for next week"},
-    {"client_name":"Rajesh Kumar", "budget":"₹3000","next_steps":"Follow up in 3 days"}
-    ]
-    print(f"Found{len(simulated_batch_results)}entries in queue. Starting batch Excel append.")
-    print("-"*50)
-    for call_data in simulated_batch_results:
-        append_to_excel(call_data) #sends each of it to the append_to_excel function to be processed and stored in the Excel file
-    print("Batch test complete! Look inside you project folder for 'sales_pipeline.xlsx' to see the results.")
+     
+    
